@@ -1,0 +1,298 @@
+#include "stdio.h"
+#include "stdlib.h"
+#include "stdbool.h"
+
+typedef struct node{
+    int frequency;
+    unsigned char symbol;
+    struct node* left;
+    struct node* right;
+} TNode;
+
+typedef struct symbol_code{
+    int length;
+    bool* code; //массив представляет код символа, где в каждой ячейке лежит разряд бита
+} TEncodedSymbol;
+
+int power(int exp, int base){
+    int answer = base;
+    for(int i = 1; i<exp; i++){
+        answer = answer * base;
+    }
+    return answer;
+}
+
+void swap(TNode* arr, int i, int j){
+    TNode temp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = temp;
+} //q-сорт по частоте вхождений символа обыкновенный
+void q_sort(TNode* list, int b, int e){
+    int l = b;
+    int r = e;
+    int pivot = list[(l+r)/2].frequency;
+    while(l <= r) {
+        while (list[l].frequency < pivot)
+            l++;
+        while (list[r].frequency > pivot)
+            r--;
+        if(l <= r)
+            swap(list, l++, r--);
+    }
+    if(b < r)
+        q_sort(list, b, r);
+    if(e > l)
+        q_sort(list, l, e);
+}
+
+void kill_tree(TNode* node){
+    if(node == NULL)
+        return;
+    kill_tree(node->left);
+    kill_tree(node->right);
+    free(node);
+}
+
+TNode* get_min_node(TNode* arr, int* size){ //сортировка по частоте вхождения символа в строку
+    swap(arr, 0, (*size)-1);
+    q_sort(arr, 0, (*size)-2);
+    (*size)--; //первый(наименьший) меняется с последним, часть массива без него сортируется. Последний и является наименьшим
+    TNode* min_node1 = malloc(sizeof(TNode)); //в конце массива лежит минимальный
+    min_node1->frequency = arr[*size].frequency;
+    min_node1->symbol = arr[*size].symbol;
+    min_node1->left = arr[*size].left;
+    min_node1->right = arr[*size].right;
+    return min_node1;
+}
+
+TNode build_huffman_tree(TNode* leaves, int size){ //возвращает корень дерева Хаффмана
+    int temp_size = size; //указывает на конец массива, тк количество вершин уменьшается при слиянии двух в одну
+    q_sort(leaves, 0, size-1); //массив отсортирован по возрастанию
+    while(temp_size > 1) {
+        TNode* min_node1 = get_min_node(leaves, &temp_size); //поиск первой наименьшей по частоте вершины
+        TNode* min_node2 = get_min_node(leaves, &temp_size); //поиск второй наименьшей по частоте вершины
+        TNode *new_node = malloc(sizeof(TNode)); //создаем новую вершину с частотой равной сумме частот 2 наименьших вершин
+        new_node->frequency = min_node1->frequency + min_node2->frequency;
+        new_node->left = min_node1;
+        new_node->right = min_node2;
+        leaves[temp_size] = *new_node; //добавляем новую вершину обратно в список вершин
+        temp_size++;
+        free(new_node);
+    }
+    return leaves[0]; //после цикла в первой ячейке массива лежит корень Н-дерева
+}
+
+void write_code_to_arr(TEncodedSymbol* arr_code, int code, int length){
+    if(length == 0){ //вырожденный случай, когда сообщение состоит из одного символа
+        bool* arr = malloc(sizeof(bool));
+        arr[0] = 0;
+        arr_code->code = arr;
+        arr_code->length = 1;
+    } else {
+        bool* arr = malloc(sizeof(bool)*length);
+        for (int i = length - 1; i >= 0; i--) {
+            arr[i] = code & 1;
+            code = code >> 1;
+        }
+        arr_code->code = arr;
+        arr_code->length = length;
+    }
+}
+
+void dfs(TNode* node, TEncodedSymbol* ascii_code, bool* encoded_huffman_tree, int length, int new_code, int* len_tree_code){  //обход в глубину
+    if(node->right == NULL && node->left == NULL){ //нашли лист ~ символ                                // для определения кодов в Н-дереве  (у каждой вершины 2 ребенка)
+        if(length == 0){                                                                                // Одновременно с этим состовляем код Н-дерева
+            encoded_huffman_tree[*len_tree_code] = 0;  (*len_tree_code)++;
+        }
+        write_code_to_arr(&ascii_code[node->symbol], new_code, length);
+        encoded_huffman_tree[*len_tree_code] = 1;  (*len_tree_code)++; //дошли до листа, записываем 1 и потом код символа в ASCII(8bit)
+        unsigned char symbol = node->symbol;
+        for(int i = 0; i < 8; i++)
+            encoded_huffman_tree[(*len_tree_code)+i] = symbol & (1 << (7 - i));
+        *len_tree_code = *len_tree_code + 8;
+        return;
+    }
+    encoded_huffman_tree[*len_tree_code] = 0;
+    (*len_tree_code)++;
+    //идем влево по дереву - пишем 0, вправо - пишем 1
+    length++;
+    new_code = new_code << 1;//идем налево дописываем в конец 0 сдвигом на 1 бит
+    dfs(node->left, ascii_code, encoded_huffman_tree, length, new_code, len_tree_code);
+    new_code = new_code | 1; //после того как сходили налево идем направо и по сути просто меняем последний ноль на 1
+    dfs(node->right, ascii_code, encoded_huffman_tree, length, new_code, len_tree_code);
+}
+
+void decode_huffman_tree(TNode** node, unsigned char* cur_sym, FILE* file_in, int* counter_bits, bool lonely_vertex){
+    if(*counter_bits % 8 == 0 && *counter_bits > 0)
+        *cur_sym = fgetc(file_in);
+    bool command = (*cur_sym) & (1 << (7 - *counter_bits % 8)); (*counter_bits)++;
+    if(command == 0){
+        TNode *left_n = malloc(sizeof(TNode));
+        left_n->left = NULL;
+        left_n->right = NULL;
+        left_n->symbol = 0;
+        TNode *right_n = malloc(sizeof(TNode));
+        right_n->left = NULL;
+        right_n->right = NULL;
+        right_n->symbol = 0;
+        (*node)->left = left_n;
+        (*node)->right = right_n;
+        decode_huffman_tree(&(*node)->left, cur_sym, file_in, counter_bits, lonely_vertex);
+        if(!lonely_vertex)
+            decode_huffman_tree(&(*node)->right, cur_sym, file_in, counter_bits, lonely_vertex);
+    }else{
+        (*node)->left = NULL; (*node)->right = NULL;
+        unsigned char symbol = 0;
+        for(int i = 0; i < 8; i++){
+            if(*counter_bits % 8 == 0)
+                *cur_sym = fgetc(file_in);
+
+            symbol += ((*cur_sym & (1<<(7-(*counter_bits%8)))) > 0) << (7-i);
+            (*counter_bits)++;
+        }
+        (*node)->symbol = symbol;
+        return;
+    }
+}
+
+void decode_string(FILE* file_in, FILE* file_out){
+    int read = 0;
+    int len = -1;
+    while(read != EOF){
+        len++;
+        read = fgetc(file_in);
+    }
+    if(len == -1)
+        exit(0);
+
+    fseek(file_in, 1, SEEK_SET);
+
+    unsigned char sym = fgetc(file_in); unsigned char* cur_sym = &sym;
+    int remain = *cur_sym >> 5; //в нулевом символе лежит остаток от деления на 8
+    bool lonely_vertex = (*cur_sym >> 4) & 1; *cur_sym = fgetc(file_in);
+
+    TNode* root = malloc(sizeof(TNode)); root->left = NULL;root->right = NULL; //создали ссылку на корень
+
+    int counter_bit = 0; int* counter_bits = &counter_bit;
+    decode_huffman_tree(&root, cur_sym, file_in, counter_bits, lonely_vertex); //и функцией декоде_хуффман_три строим поддеревья корня
+
+    TNode* symbol = root;
+    while((*counter_bits) < (len-1)*8-((8-remain)%8)){
+        if((*counter_bits) % 8 == 0)
+            *cur_sym = fgetc(file_in);
+        bool command = (*cur_sym & (128 >> (*counter_bits) % 8)) > 0;
+        if(command)
+            symbol = symbol->right;
+        else
+            symbol = symbol->left;
+
+        if(symbol->left == NULL && symbol->right == NULL) {
+            fputc(symbol->symbol, file_out);
+            symbol = root;
+        }
+        (*counter_bits)++;
+    }
+    kill_tree(root);
+}
+
+void encode_string(FILE* file_in, FILE* file_out){
+    int ascii_freq[256]; //записана частота каждого ascii символа, где индекс - ascii code
+    for(int i = 0; i < 256; i++)
+        ascii_freq[i] = 0;
+
+    int len_string = 0;
+    int read = fgetc(file_in);
+    while(read != EOF) {
+        ascii_freq[read]++;
+        len_string++;
+        read = fgetc(file_in);
+    }
+    fseek(file_in, 1, SEEK_SET);
+    if(len_string == 0)//если нет входной строки, после "c" или "d", то завершаем работу досрочно, кодировать нечего
+        exit(0);
+
+    int different_c = 0; //подсчет количества различных символов в строке
+    for(int i = 0; i < 256; i++)
+        if(ascii_freq[i] > 0)
+            different_c++;
+
+    TNode* leaves = malloc(sizeof(TNode)*different_c);
+    unsigned char* symbol = malloc(sizeof(unsigned char)*different_c);
+    int counter_leaves = 0;
+    for(int i = 0; i < 256; i++) //для каждого особенного символа создали объект струкруты узла дерева
+        if(ascii_freq[i] > 0){
+            leaves[counter_leaves].symbol = i;
+            leaves[counter_leaves].left = NULL;
+            leaves[counter_leaves].right = NULL;
+            leaves[counter_leaves].frequency = ascii_freq[i];
+            symbol[counter_leaves] = i;
+            counter_leaves++;
+        }
+
+    bool* encoded_huffman_tree = malloc(sizeof(bool)*((counter_leaves+(power(2,counter_leaves)-2))+20));
+    TNode root = build_huffman_tree(leaves, different_c);
+    TEncodedSymbol* encoded_ascii = malloc(sizeof(TEncodedSymbol)*256);
+
+    int t = 0;int *len_code_tree = &t;
+    dfs(&root, encoded_ascii, encoded_huffman_tree, 0, 0, len_code_tree);
+
+    int len_code_string = 0;
+    for(int i = 0; i < 256; i++)
+        if(ascii_freq[i] > 0)
+            len_code_string += ascii_freq[i] * encoded_ascii[i].length;
+
+    unsigned char out = 0;
+    fputc((((len_code_string + *len_code_tree) % 8)<<5) + ((different_c == 1)<<4), file_out); //записал остаток от деления на 8 в начало файла
+    int out_position = 0;
+    for(int i = 0; i < *len_code_tree; i++){ //вывожу код дерева переведенный в символы по 8 бит
+        if(out_position == 8){
+            fputc(out, file_out);
+            out = 0;
+            out_position = 0;
+        }
+        out += encoded_huffman_tree[i] << (7 - out_position);
+        out_position++;
+    }
+
+    for(int i = 0; i < len_string; i++){
+        unsigned char cur_sym = fgetc(file_in);
+        for(int j = 0; j < encoded_ascii[cur_sym].length; j++){
+            if(out_position == 8){
+                fputc(out, file_out);
+                out = 0;
+                out_position = 0;
+            }
+            out += encoded_ascii[cur_sym].code[j] << (7 - out_position);
+            out_position++;
+        }
+    }
+    if(out_position >= 0) { //если остались биты не влезшие в чанки по 8, то дописываем в конец
+        fputc(out, file_out);
+    }
+
+    for(int i = 0; i < different_c; i++)
+        free(encoded_ascii[symbol[i]].code);
+    free(leaves);
+    free(encoded_ascii);
+    free(symbol);
+    free(encoded_huffman_tree);
+    kill_tree(root.left);
+    kill_tree(root.right);
+}
+
+int main(){
+    FILE* in;
+    FILE* out;
+    in = fopen("in.txt", "r");
+    out = fopen("out.txt", "w");
+    char mode = (char) fgetc(in);
+
+    if(mode == 'c')
+        encode_string(in, out);
+    else if(mode == 'd')
+        decode_string(in, out);
+
+    fclose(in);
+    fclose(out);
+    return 0;
+}
